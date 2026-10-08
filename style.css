@@ -1023,3 +1023,13 @@ body {
     max-width: 88%;
   }
 }
+
+/* Tarjeta de revisión antes del PDF final */
+.review-card {
+  border-style: solid;
+  background: #fbf3e2;
+}
+
+.review-card .itin-slot {
+  grid-template-columns: 92px 1fr;
+}
