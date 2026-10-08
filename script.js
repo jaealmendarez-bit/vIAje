@@ -462,7 +462,7 @@ function renderizarListaDrawer(filtro = '') {
     const card = document.createElement('div');
     card.className = `dossier-card ${expedienteActual && expedienteActual.id === exp.id ? 'active' : ''}`;
 
-    const tienePdf = Boolean(exp.ultimoItinerario);
+    const tienePdf = Boolean(exp.ultimoItinerario) && exp.ultimoItinerario.validado !== false;
     const nombreVisible = exp.cliente === 'Nueva Consulta' ? 'Cliente sin nombre' : exp.cliente;
     card.innerHTML = `
       <div class="dossier-head">
@@ -774,6 +774,11 @@ function descargarPdfExpediente(id) {
 function descargarPdfActual() {
   if (!ultimoItinerarioGenerado) {
     alert('Primero formula o selecciona un itinerario para poder descargarlo en PDF.');
+    return;
+  }
+  // Una propuesta sin validar pasa primero por la revisión
+  if (ultimoItinerarioGenerado.validado === false) {
+    mostrarRevisionPropuesta();
     return;
   }
   const exp = obtenerOCrearExpedienteActual();
@@ -1398,11 +1403,7 @@ function generarHTMLItinerario(it, nombreCliente, meta = {}) {
     html += `<div class="stamp-verification">La plantilla local cubre hasta ${esc(it.dias)} día(s) para este destino (pediste ${esc(it.diasSolicitados)}). Con Gemini puedes generar la duración completa.</div>`;
   }
 
-  html += `
-    <button type="button" class="btn-download-pdf" onclick="descargarPdfActual()">
-      Descargar Itinerario en PDF para el Cliente
-    </button>
-  `;
+  // El botón de PDF ya no va aquí: el PDF final se genera al confirmar la revisión
   return html;
 }
 
@@ -1434,6 +1435,12 @@ async function generarYMostrarItinerario(params) {
 
   try {
     const res = await producirItinerario(params);
+    // Se guardan las claves para poder ajustar la propuesta en la revisión
+    res.obj.estiloClave = ESTILOS[params.estilo] ? params.estilo : 'mix';
+    res.obj.presupuestoClave = presupuestoAClave(params.presupuesto);
+    res.obj.validado = false;
+    flujoItinerario.estilo = res.obj.estiloClave;
+    flujoItinerario.presupuesto = res.obj.presupuestoClave;
     exp.ultimoItinerario = res.obj;
     ultimoItinerarioGenerado = res.obj;
     exp.presupuesto = res.obj.presupuestoEtiqueta;
@@ -1444,15 +1451,289 @@ async function generarYMostrarItinerario(params) {
     renderizarListaDrawer(searchClientInput ? searchClientInput.value : '');
 
     renderMensajeUI('bot', generarHTMLItinerario(res.obj, exp.cliente, { ...res, modificado: Boolean(params.previo) }), false, true);
-    renderizarChips([
-      ['itinerario', 'Nueva Propuesta', true],
-      ['tips', 'Logística'],
-      ['menu', 'Menú Principal']
-    ]);
+    mostrarRevisionPropuesta();
   } finally {
     ocultarEscribiendo();
     setOcupado(false);
   }
+}
+
+/* ==========================================================================
+   9b. CICLO DE VALIDACIÓN ANTES DEL PDF FINAL
+   Tras generar la propuesta se presenta su estructura base y se pregunta si
+   se desea ajustar un día o el enfoque (estilo, presupuesto o nombre). El PDF
+   solo se genera cuando el agente confirma.
+   ========================================================================== */
+const PASOS_REVISION = ['revision', 'ajuste_dia', 'ajuste_dia_texto', 'ajuste_estilo', 'ajuste_presupuesto', 'ajuste_nombre'];
+
+const CHIPS_REVISION = [
+  ['rev_ok', 'Confirmar y generar PDF', true],
+  ['rev_dia', 'Ajustar un día'],
+  ['rev_estilo', 'Cambiar estilo'],
+  ['rev_presupuesto', 'Cambiar presupuesto'],
+  ['rev_nombre', 'Cambiar nombre del cliente'],
+  ['menu', 'Menú Principal']
+];
+
+function enRevision() {
+  return PASOS_REVISION.includes(flujoItinerario.paso);
+}
+
+function mostrarRevisionPropuesta() {
+  const it = ultimoItinerarioGenerado;
+  if (!it) return;
+  const exp = obtenerOCrearExpedienteActual();
+  flujoItinerario.paso = 'revision';
+  flujoItinerario.diaAjuste = null;
+
+  const nombre = exp.cliente && exp.cliente !== 'Nueva Consulta' ? exp.cliente : 'Sin nombre';
+  const estructura = it.bloques
+    .map((b, i) => `<div class="itin-slot"><em>Día ${i + 1}</em><span>${esc(b.titulo)}</span></div>`)
+    .join('');
+
+  renderMensajeUI('bot', `
+    <div class="itin-card review-card">
+      <b>Revisión antes del PDF final</b>
+      <div class="itin-slot"><em>Cliente</em><span>${esc(nombre)}</span></div>
+      <div class="itin-slot"><em>Destino</em><span>${esc(it.destino || exp.destino)}</span></div>
+      <div class="itin-slot"><em>Duración</em><span>${esc(it.dias)} día(s)</span></div>
+      <div class="itin-slot"><em>Estilo</em><span>${esc(it.estiloEtiqueta)}</span></div>
+      <div class="itin-slot"><em>Presupuesto</em><span>${esc(it.presupuestoEtiqueta)}</span></div>
+      ${estructura}
+    </div>
+    <p>¿Deseas <strong>ajustar algún día</strong> o el <strong>enfoque</strong> (estilo, presupuesto o nombre del cliente) antes de generar el PDF final?</p>
+  `, false, true);
+  renderizarChips(CHIPS_REVISION);
+}
+
+function volverARevision(texto = '¿Qué más deseas ajustar antes de generar el PDF final?') {
+  flujoItinerario.paso = 'revision';
+  flujoItinerario.diaAjuste = null;
+  renderMensajeUI('bot', `<p>${texto}</p>`, false, true);
+  renderizarChips(CHIPS_REVISION);
+}
+
+function confirmarPropuestaYGenerarPdf() {
+  const it = ultimoItinerarioGenerado;
+  if (!it) {
+    renderMensajeUI('bot', '<p>Aún no hay una propuesta para exportar; armémosla primero.</p>', false, true);
+    iniciarFlujoItinerario();
+    return;
+  }
+  const exp = obtenerOCrearExpedienteActual();
+  flujoItinerario.paso = null;
+  flujoItinerario.diaAjuste = null;
+  it.validado = true;
+  if (exp.ultimoItinerario) exp.ultimoItinerario.validado = true;
+  guardarExpedientesStorage();
+  renderizarListaDrawer(searchClientInput ? searchClientInput.value : '');
+
+  const cName = exp.cliente !== 'Nueva Consulta' ? ` de <strong>${esc(exp.cliente)}</strong>` : '';
+  renderMensajeUI('bot', `
+    <p>Propuesta${cName} validada. Generando el PDF final para el cliente.</p>
+    <button type="button" class="btn-download-pdf" onclick="descargarPdfActual()">
+      Descargar Itinerario en PDF para el Cliente
+    </button>
+  `, false, true);
+  descargarPdfActual();
+  renderizarChips([
+    ['itinerario', 'Nueva Propuesta', true],
+    ['tips', 'Logística'],
+    ['menu', 'Menú Principal']
+  ]);
+}
+
+// Vuelve a generar la propuesta actual aplicando un ajuste puntual
+async function regenerarPropuesta({ estilo = null, presupuesto = null, instruccion }) {
+  const it = ultimoItinerarioGenerado;
+  const exp = obtenerOCrearExpedienteActual();
+  flujoItinerario.paso = null;
+  await generarYMostrarItinerario({
+    dias: it.diasSolicitados || it.dias,
+    estilo: estilo || it.estiloClave || flujoItinerario.estilo,
+    presupuesto: presupuesto || it.presupuestoClave || exp.presupuesto,
+    destino: exp.destino,
+    instruccion,
+    previo: it
+  });
+}
+
+function pedirDiaAAjustar() {
+  if (!apiKey) {
+    volverARevision('Ajustar un día específico requiere Gemini (⚙️). Con el motor local puedes cambiar el estilo, el presupuesto o el nombre del cliente.');
+    return;
+  }
+  flujoItinerario.paso = 'ajuste_dia';
+  renderMensajeUI('bot', '<p>¿Qué <strong>día</strong> deseas ajustar?</p>', false, true);
+  renderizarChips([
+    ...ultimoItinerarioGenerado.bloques.map((b, i) => [`rev_d${i + 1}`, `Día ${i + 1}`]),
+    ['rev_volver', 'Volver a la revisión']
+  ]);
+}
+
+function pedirCambioDeDia(n) {
+  const bloque = ultimoItinerarioGenerado.bloques[n - 1];
+  if (!bloque) {
+    pedirDiaAAjustar();
+    return;
+  }
+  flujoItinerario.paso = 'ajuste_dia_texto';
+  flujoItinerario.diaAjuste = n;
+  renderMensajeUI('bot', `<p>Describe el cambio para el <strong>Día ${n}</strong> (${esc(bloque.titulo)}). Por ejemplo: "más museos y una comida típica" o "tarde libre en la playa".</p>`, false, true);
+  renderizarChips([['rev_volver', 'Volver a la revisión']]);
+}
+
+function pedirNuevoEstilo() {
+  flujoItinerario.paso = 'ajuste_estilo';
+  renderMensajeUI('bot', `<p>Estilo actual: <strong>${esc(ultimoItinerarioGenerado.estiloEtiqueta)}</strong>. ¿Qué enfoque prefieres?</p>`, false, true);
+  renderizarChips([
+    ...Object.entries(ESTILOS).map(([clave, e]) => [`rev_s_${clave}`, e.etiqueta]),
+    ['rev_volver', 'Volver a la revisión']
+  ]);
+}
+
+function pedirNuevoPresupuesto() {
+  flujoItinerario.paso = 'ajuste_presupuesto';
+  renderMensajeUI('bot', `<p>Presupuesto actual: <strong>${esc(ultimoItinerarioGenerado.presupuestoEtiqueta)}</strong>. ¿Qué nivel prefieres?</p>`, false, true);
+  renderizarChips([
+    ['rev_b_mochi', 'Económico'],
+    ['rev_b_medio', 'Medio / Confort'],
+    ['rev_b_todo', 'Todo Incluido / Premium'],
+    ['rev_volver', 'Volver a la revisión']
+  ]);
+}
+
+function pedirNuevoNombre() {
+  flujoItinerario.paso = 'ajuste_nombre';
+  renderMensajeUI('bot', '<p>Escribe el <strong>nombre del cliente</strong> tal como debe aparecer en el PDF.</p>', false, true);
+  renderizarChips([['rev_volver', 'Volver a la revisión']]);
+}
+
+async function aplicarNuevoEstilo(estilo) {
+  const e = ESTILOS[estilo];
+  if (!e) return pedirNuevoEstilo();
+  if (estilo === ultimoItinerarioGenerado.estiloClave) {
+    return volverARevision(`La propuesta ya tiene el estilo <strong>${esc(e.etiqueta)}</strong>. ¿Deseas ajustar algo más?`);
+  }
+  await regenerarPropuesta({
+    estilo,
+    instruccion: `Cambia el enfoque del viaje al estilo "${e.etiqueta}" (${e.prompt}). Adapta las actividades de cada día a ese estilo.`
+  });
+}
+
+async function aplicarNuevoPresupuesto(clave) {
+  const p = DATOS_PRESUPUESTO[clave];
+  if (!p) return pedirNuevoPresupuesto();
+  if (clave === ultimoItinerarioGenerado.presupuestoClave) {
+    return volverARevision(`La propuesta ya tiene el presupuesto <strong>${esc(p.etiqueta)}</strong>. ¿Deseas ajustar algo más?`);
+  }
+  await regenerarPropuesta({
+    presupuesto: clave,
+    instruccion: `Cambia el presupuesto a "${p.etiqueta}". Ajusta hospedaje, restaurantes y actividades a ese nivel.`
+  });
+}
+
+function aplicarNuevoNombre(texto) {
+  const nombre = texto.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñÜü\s.'-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+  if (nombre.length < 2) {
+    renderMensajeUI('bot', '<p>No reconocí un nombre válido. Escríbelo de nuevo (por ejemplo: María López).</p>', false, true);
+    return;
+  }
+  const exp = obtenerOCrearExpedienteActual();
+  exp.cliente = nombre;
+  guardarExpedientesStorage();
+  actualizarBarraClienteActivo();
+  renderizarListaDrawer(searchClientInput ? searchClientInput.value : '');
+  renderMensajeUI('bot', `<p>Nombre actualizado a <strong>${esc(nombre)}</strong>.</p>`, false, true);
+  mostrarRevisionPropuesta();
+}
+
+async function manejarAccionRevision(clave) {
+  if (!ultimoItinerarioGenerado) {
+    renderMensajeUI('bot', '<p>Ya no hay una propuesta activa para revisar; armemos una nueva.</p>', false, true);
+    iniciarFlujoItinerario();
+    return;
+  }
+  if (clave === 'rev_ok') return confirmarPropuestaYGenerarPdf();
+  if (clave === 'rev_volver') return volverARevision();
+  if (clave === 'rev_dia') return pedirDiaAAjustar();
+  if (/^rev_d\d+$/.test(clave)) return pedirCambioDeDia(parseInt(clave.slice(5), 10));
+  if (clave === 'rev_estilo') return pedirNuevoEstilo();
+  if (clave.startsWith('rev_s_')) return aplicarNuevoEstilo(clave.slice(6));
+  if (clave === 'rev_presupuesto') return pedirNuevoPresupuesto();
+  if (clave.startsWith('rev_b_')) return aplicarNuevoPresupuesto(clave.slice(6));
+  if (clave === 'rev_nombre') return pedirNuevoNombre();
+}
+
+// Respuestas escritas mientras la revisión está activa
+async function manejarRespuestaRevisionTexto(texto, t) {
+  switch (flujoItinerario.paso) {
+    case 'ajuste_nombre':
+      aplicarNuevoNombre(texto);
+      return true;
+
+    case 'ajuste_dia_texto': {
+      const n = flujoItinerario.diaAjuste;
+      await regenerarPropuesta({
+        instruccion: `Ajusta únicamente el Día ${n}: ${texto}. Conserva los demás días sin cambios.`
+      });
+      return true;
+    }
+
+    case 'ajuste_dia': {
+      const m = t.match(/\b(\d{1,2})\b/);
+      if (m) pedirCambioDeDia(parseInt(m[1], 10));
+      else renderMensajeUI('bot', '<p>Indica el número de día que deseas ajustar o elige una opción.</p>', false, true);
+      return true;
+    }
+
+    case 'ajuste_estilo': {
+      const e = detectarEstilo(t);
+      if (e) await aplicarNuevoEstilo(e);
+      else renderMensajeUI('bot', '<p>Elige el estilo con los botones o escríbelo (relax, aventura, vida nocturna o completo).</p>', false, true);
+      return true;
+    }
+
+    case 'ajuste_presupuesto': {
+      const p = detectarPresupuesto(t);
+      if (p) await aplicarNuevoPresupuesto(p);
+      else renderMensajeUI('bot', '<p>Indica el presupuesto: económico, medio o todo incluido / premium.</p>', false, true);
+      return true;
+    }
+
+    case 'revision':
+      if (/^(no|nop|aun no|todavia no)\b/.test(t)) {
+        volverARevision('De acuerdo. ¿Qué deseas ajustar?');
+        return true;
+      }
+      // "cambia el estilo a aventura", "presupuesto premium", "el nombre es Ana Ruiz"
+      if (/\b(estilo|enfoque)\b/.test(t)) {
+        const e = detectarEstilo(t);
+        if (e) await aplicarNuevoEstilo(e);
+        else pedirNuevoEstilo();
+        return true;
+      }
+      if (/\bpresupuesto\b/.test(t)) {
+        const p = detectarPresupuesto(t);
+        if (p) await aplicarNuevoPresupuesto(p);
+        else pedirNuevoPresupuesto();
+        return true;
+      }
+      if (/\bnombre\b/.test(t)) {
+        const m = texto.match(/nombre(?:\s+del\s+cliente)?\s*(?:a|por|es|sea|:)\s+(.+)$/i);
+        if (m) aplicarNuevoNombre(m[1]);
+        else pedirNuevoNombre();
+        return true;
+      }
+      // Las instrucciones de cambio libres siguen el camino normal de modificación
+      if (REGEX_PIDE_MODIFICAR.test(t)) return false;
+      if (/\b(si|ok|okay|va|vale|dale|listo|perfecto|correcto|adelante|confirm\w*|aprob\w*|genera\w*|pdf|descarga\w*)\b/.test(t)) {
+        confirmarPropuestaYGenerarPdf();
+        return true;
+      }
+      return false;
+  }
+  return false;
 }
 
 /* ==========================================================================
@@ -1498,6 +1779,13 @@ function renderizarChipsPrincipales() {
 async function manejarAccionChip(clave, texto) {
   autoDetectarDatosCliente(texto);
   renderMensajeUI('user', texto);
+
+  if (clave.startsWith('rev_')) {
+    await manejarAccionRevision(clave);
+    return;
+  }
+  // Salir a otro tema deja la propuesta sin validar (se puede retomar al pedir el PDF)
+  if (enRevision()) flujoItinerario.paso = null;
 
   if (clave === 'itinerario') {
     iniciarFlujoItinerario();
@@ -1611,6 +1899,21 @@ async function completarFlujoItinerario() {
   });
 }
 
+function detectarEstilo(t) {
+  if (/\b(relax\w*|descans\w*|tranquil\w*|playa)\b/.test(t)) return 'relax';
+  if (/\b(aventur\w*|naturaleza)\b/.test(t)) return 'aventura';
+  if (/\b(fiesta|noctur\w*|antro\w*|noche)\b/.test(t)) return 'fiesta';
+  if (/\b(mix|complet\w*|mezcla|variad\w*)\b/.test(t)) return 'mix';
+  return null;
+}
+
+function detectarPresupuesto(t) {
+  if (/\b(econom\w*|barato|mochil\w*|bajo)\b/.test(t)) return 'mochi';
+  if (/\b(todo incluido|lujo|premium|alto)\b/.test(t)) return 'todo';
+  if (/\b(medio|confort|normal|estandar)\b/.test(t)) return 'medio';
+  return null;
+}
+
 // El agente escribe en lugar de tocar los chips mientras el asistente guiado está activo
 async function manejarRespuestaFlujoTexto(texto, t) {
   const exp = obtenerOCrearExpedienteActual();
@@ -1621,6 +1924,8 @@ async function manejarRespuestaFlujoTexto(texto, t) {
     renderizarChipsPrincipales();
     return true;
   }
+
+  if (enRevision()) return manejarRespuestaRevisionTexto(texto, t);
 
   switch (flujoItinerario.paso) {
     case 'destino':
@@ -1649,11 +1954,7 @@ async function manejarRespuestaFlujoTexto(texto, t) {
     }
 
     case 'estilo': {
-      let e = null;
-      if (/\b(relax\w*|descans\w*|tranquil\w*|playa)\b/.test(t)) e = 'relax';
-      else if (/\b(aventur\w*|naturaleza)\b/.test(t)) e = 'aventura';
-      else if (/\b(fiesta|noctur\w*|antro\w*|noche)\b/.test(t)) e = 'fiesta';
-      else if (/\b(mix|complet\w*|mezcla|variad\w*)\b/.test(t)) e = 'mix';
+      const e = detectarEstilo(t);
       if (e) {
         flujoItinerario.estilo = e;
         pasoFlujoPresupuesto();
@@ -1664,10 +1965,7 @@ async function manejarRespuestaFlujoTexto(texto, t) {
     }
 
     case 'presupuesto': {
-      let p = null;
-      if (/\b(econom\w*|barato|mochil\w*|bajo)\b/.test(t)) p = 'mochi';
-      else if (/\b(todo incluido|lujo|premium|alto)\b/.test(t)) p = 'todo';
-      else if (/\b(medio|confort|normal|estandar)\b/.test(t)) p = 'medio';
+      const p = detectarPresupuesto(t);
       if (p) {
         flujoItinerario.presupuesto = p;
         await completarFlujoItinerario();
@@ -1879,6 +2177,8 @@ async function enviarMensajeUsuario(texto) {
   }
 }
 
+const REGEX_PIDE_MODIFICAR = /\b(cambia\w*|modifica\w*|ajusta\w*|agrega\w*|anade|quita\w*|elimina\w*|reemplaza\w*|sustituye\w*|prefiero|mejor|en vez de|en lugar de)\b/;
+
 async function procesarMensaje(mensaje, t) {
   const exp = obtenerOCrearExpedienteActual();
 
@@ -1898,6 +2198,12 @@ async function procesarMensaje(mensaje, t) {
       <p>¿Qué perfil tiene tu cliente? Con eso te preparo el itinerario completo en PDF.</p>
     `, false, true);
     return;
+  }
+
+  // Nombre del cliente o cambio de un día en la revisión: el texto se toma tal cual,
+  // sin pasar por la autodetección (que podría cambiar destino o presupuesto)
+  if (flujoItinerario.paso === 'ajuste_nombre' || flujoItinerario.paso === 'ajuste_dia_texto') {
+    if (await manejarRespuestaFlujoTexto(mensaje, t)) return;
   }
 
   // 2. Guardia de tema (lista blanca). Va antes de tocar el expediente.
@@ -1943,11 +2249,13 @@ async function procesarMensaje(mensaje, t) {
 
   const pidePdf = /\b(pdf|descarga\w*)\b/.test(t);
   const pideCotizar = /\b(cotiza\w*|itinerario|propuesta|estancia|arma\w*|prepara\w*|planea\w*|plan)\b/.test(t) || /\d+\s*(dias?|noches?)/.test(t);
-  const pideModificar = /\b(cambia\w*|modifica\w*|ajusta\w*|agrega\w*|anade|quita\w*|elimina\w*|reemplaza\w*|sustituye\w*|prefiero|mejor|en vez de|en lugar de)\b/.test(t);
+  const pideModificar = REGEX_PIDE_MODIFICAR.test(t);
 
   // 7. Descargar PDF
   if (pidePdf) {
-    if (ultimoItinerarioGenerado) {
+    if (ultimoItinerarioGenerado && ultimoItinerarioGenerado.validado === false) {
+      confirmarPropuestaYGenerarPdf();
+    } else if (ultimoItinerarioGenerado) {
       renderMensajeUI('bot', '<p>Listo, descargando el PDF de la propuesta actual.</p>', false, true);
       descargarPdfActual();
     } else {
