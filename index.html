@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>vIAje — Suite para Agentes de Viajes</title>
+  <link rel="stylesheet" href="style.css" />
+  <!-- Librería jsPDF para generación y descarga de itinerarios en PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+
+  <!-- Drawer Lateral: Bitácora de Clientes y Conversaciones Anteriores -->
+  <div class="drawer-overlay" id="drawerOverlay" aria-hidden="true"></div>
+  <aside class="drawer" id="drawer" aria-label="Bitácora de clientes y consultas anteriores">
+    <div class="drawer-header">
+      <div class="drawer-title">
+        <span class="drawer-icon">📖</span>
+        <div>
+          <h3>Bitácora de Clientes</h3>
+          <p class="drawer-sub">Registro de consultas y cotizaciones</p>
+        </div>
+      </div>
+      <button type="button" class="drawer-close" id="closeDrawerBtn" aria-label="Cerrar panel">✕</button>
+    </div>
+
+    <div class="drawer-actions">
+      <button type="button" class="new-client-btn" id="drawerNewClientBtn">
+        <span>+</span> Nuevo Cliente / Consulta
+      </button>
+      <input type="search" id="searchClientInput" class="drawer-search" placeholder="Buscar cliente o destino..." />
+    </div>
+
+    <div class="drawer-list" id="dossierList">
+      <!-- Los expedientes de la bitácora se renderizan dinámicamente aquí -->
+    </div>
+
+    <div class="drawer-footer">
+      <p>Bitácora activa · 32 Estados de la República Mexicana</p>
+    </div>
+  </aside>
+
+  <!-- Contenedor Principal del Boleto de Avión -->
+  <div class="app">
+    <div class="card" role="application" aria-label="vIAje, suite para agentes de viajes">
+
+      <!-- Encabezado del Boleto -->
+      <header class="ticket-head">
+        <div class="brand">
+          <span class="brand-mark">✈</span>
+          <div class="brand-text">
+            <h1 class="brand-name">v<span class="ia-mark">IA</span>je</h1>
+            <p class="brand-sub">Mostrador de Agente de Viajes</p>
+          </div>
+        </div>
+
+        <div class="ticket-controls">
+          <button type="button" class="badge-btn" id="openDrawerBtn" title="Ver bitácora de clientes anteriores">
+            Bitácora <span class="badge-count" id="dossierCount">0</span>
+          </button>
+          <button type="button" class="badge-btn badge-btn--gold" id="newChatBtn" title="Iniciar nueva consulta">
+            + Nuevo
+          </button>
+          <button type="button" class="icon-tool-btn" id="openKeyModalBtn" title="Configurar Gemini AI">
+            ⚙️
+          </button>
+        </div>
+
+        <div class="ticket-meta">
+          <p class="ticket-id" id="ticketId">N.º 001</p>
+          <p class="ticket-date" id="ticketDate">—</p>
+        </div>
+      </header>
+
+      <!-- Perforación Superior con Muescas Circulares -->
+      <div class="perforation" aria-hidden="true"></div>
+
+      <!-- Barra de Estado del Cliente Activo -->
+      <div class="active-client-bar" id="activeClientBar" style="display: none;">
+        <div class="active-client-info">
+          <span class="client-tag">CLIENTE</span>
+          <strong id="activeClientName">Sin asignar</strong>
+          <span class="client-detail" id="activeClientDetail"></span>
+        </div>
+        <button type="button" class="btn-clear-client" id="clearActiveClientBtn" title="Desvincular cliente">✕</button>
+      </div>
+
+      <!-- Área de Mensajes del Chat -->
+      <main class="chat" id="chat" aria-live="polite">
+        <!-- Mensajes inyectados dinámicamente -->
+      </main>
+
+      <!-- Botones Rápidos / Chips Temáticos -->
+      <div class="chips" id="chips"></div>
+
+      <!-- Perforación Inferior -->
+      <div class="perforation" aria-hidden="true"></div>
+
+      <!-- Formulario de Entrada (Composer) -->
+      <form class="composer" id="composer">
+        <input
+          id="input"
+          type="text"
+          autocomplete="off"
+          placeholder="Escribe tu consulta (ej: Carlos, 4 personas, Oaxaca, 3 días)..."
+          aria-label="Escribe tu mensaje para vIAje"
+        />
+        <button type="submit" class="send-btn" id="sendBtn" aria-label="Enviar mensaje">➤</button>
+      </form>
+
+    </div>
+
+    <!-- Pie del Prototipo -->
+    <footer class="app-footer">
+      <p class="hint">
+        <strong>vIAje Prototipo 1</strong> · Especialista en los 32 Estados de México · Bitácora y Exportación en PDF
+      </p>
+    </footer>
+  </div>
+
+  <!-- Modal de Configuración de Gemini -->
+  <div class="modal-overlay" id="keyModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Configuración de Inteligencia Artificial</h3>
+        <button type="button" class="modal-close" id="closeKeyModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          <strong>vIAje</strong> funciona de inmediato con su motor local (plantillas de Los Cabos, CDMX, Cancún y Oaxaca) y el generador de PDF.
+        </p>
+        <p class="modal-desc">
+          Opcional: con una API Key de Google Gemini, la IA arma itinerarios con lugares reales para cualquiera de los 32 estados, modifica propuestas ya generadas y responde consultas abiertas.
+          Puedes crear una clave en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
+        </p>
+        <label for="geminiApiKeyInput" class="modal-label">Google Gemini API Key:</label>
+        <input
+          type="password"
+          id="geminiApiKeyInput"
+          class="modal-input"
+          placeholder="AIzaSy..."
+          autocomplete="off"
+        />
+        <label for="geminiModelInput" class="modal-label">Modelo de Gemini:</label>
+        <input
+          type="text"
+          id="geminiModelInput"
+          class="modal-input"
+          placeholder="gemini-3.5-flash"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="modal-desc" style="margin-top: 8px; font-size: 11.5px; opacity: .75;">
+          Si aparece un error de modelo no disponible, escribe aquí otro nombre vigente de la lista de modelos de Google.
+          La clave se guarda solo en este navegador; no publiques esta página con una clave incluida.
+        </p>
+        <div class="modal-status" id="apiStatusMessage"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" id="clearApiKeyBtn">Eliminar Clave</button>
+        <button type="button" class="btn-primary" id="saveApiKeyBtn">Guardar y Probar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
