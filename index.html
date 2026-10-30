@@ -117,7 +117,31 @@
       </p>
     </footer>
   </div>
-
+  <!-- Modal de Identidad de Agencia -->
+  <div class="modal-overlay" id="agencyModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Identidad de la Agencia</h3>
+        <button type="button" class="modal-close" id="closeAgencyModalBtn">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Estos datos aparecerán en el encabezado de todos los PDFs generados.</p>
+        <label for="agencyNameInput" class="modal-label">Nombre de la Agencia:</label>
+        <input type="text" id="agencyNameInput" class="modal-input" placeholder="Ej. Viajes del Sol S.A." autocomplete="off" />
+        <label for="agencyPhoneInput" class="modal-label">Teléfono / WhatsApp:</label>
+        <input type="text" id="agencyPhoneInput" class="modal-input" placeholder="Ej. +52 55 1234 5678" autocomplete="off" />
+        <label for="agencySloganInput" class="modal-label">Slogan o Tagline:</label>
+        <input type="text" id="agencySloganInput" class="modal-input" placeholder="Ej. Tu viaje, nuestra pasión" autocomplete="off" />
+        <label for="agencyEmailInput" class="modal-label">Correo electrónico:</label>
+        <input type="email" id="agencyEmailInput" class="modal-input" placeholder="Ej. contacto@agencia.com" autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-secondary" id="clearAgencyBtn">Borrar Datos</button>
+        <button type="button" class="btn-primary" id="saveAgencyBtn">Guardar</button>
+      </div>
+    </div>
+  </div>
+  
   <!-- Modal de Configuración de Gemini -->
   <div class="modal-overlay" id="keyModal" style="display: none;">
     <div class="modal-box">
