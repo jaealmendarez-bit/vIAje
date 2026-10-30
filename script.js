@@ -1770,6 +1770,9 @@ async function manejarRespuestaRevisionTexto(texto, t) {
    ========================================================================== */
 const OPCIONES_MENU_PRINCIPAL = [
   ['itinerario', 'Nueva Propuesta', true],
+  ['comparar', 'Comparar Opciones'],
+  ['preferencias', 'Preferencias Viajero'],
+  ['presupuesto', 'Distribución Presupuesto'],
   ['playas', 'Destinos de Costa'],
   ['cultura', 'Atracciones'],
   ['comida', 'Restaurantes'],
