@@ -1889,6 +1889,12 @@ function manejarChipPreferencias(clave) {
   const exp = obtenerOCrearExpedienteActual();
   if (!exp.preferencias) exp.preferencias = { dieta: [], movilidad: false, alergias: '', extras: '' };
 
+  // SI LA CLAVE ES 'preferencias', MUESTRA EL MENÚ PRINCIPAL DE PREFERENCIAS
+  if (clave === 'preferencias') {
+    mostrarMenuPreferencias();
+    return true;
+  }
+
   if (clave === 'pref_movilidad') {
     exp.preferencias.movilidad = !exp.preferencias.movilidad;
     guardarExpedientesStorage();
@@ -1904,7 +1910,7 @@ function manejarChipPreferencias(clave) {
   }
   if (clave === 'pref_dieta') {
     flujoItinerario.paso = 'preferencias_dieta';
-    renderMensajeUI('bot', '<p>¿Qué tipo de dieta sigue el viajero? (Ej: vegetariano, vegano, sin gluten, sin mariscos, halal)</p>', false, true);
+    renderMensajeUI('bot', '<p>¿Qué tipo de dieta sigue el viajero? (Ej: vegetariano, vegano, sin gluten, sin mariscos, halal, o escríbelo)</p>', false, true);
     renderizarChips([
       ['pref_d_vegetariano', 'Vegetariano'],
       ['pref_d_vegano', 'Vegano'],
@@ -1930,7 +1936,7 @@ function manejarChipPreferencias(clave) {
   }
   if (clave === 'pref_extras') {
     flujoItinerario.paso = 'preferencias_extras';
-    renderMensajeUI('bot', '<p>Escribe cualquier nota especial del viajero (Ej: silla de ruedas, bebé a bordo, celebración de aniversario):</p>', false, true);
+    renderMensajeUI('bot', '<p>Escribe cualquier nota especial del viajero (Ej: silla de ruedas, bebé a bordo, celebración especial):</p>', false, true);
     renderizarChips([['pref_menu', 'Volver']]);
     return true;
   }
@@ -2529,7 +2535,12 @@ async function procesarMensaje(mensaje, t) {
     if (await manejarMensajeMultidestino(mensaje)) return;
   }
 
-  // Captura monto de presupuesto si el flujo lo está esperando [Teresa]
+  // 1. Captura texto de preferencias especiales antes de cualquier otra regla [Janeth]
+  if (['preferencias_dieta', 'preferencias_alergias', 'preferencias_extras'].includes(flujoItinerario.paso)) {
+    if (manejarTextoPreferencias(mensaje)) return;
+  }
+
+  // 2. Captura monto de presupuesto si el flujo lo está esperando [Teresa]
   if (flujoItinerario.paso === 'presupuesto_monto') {
     const mMatch = t.match(/(\d[\d,\.]+)/);
     if (mMatch) {
@@ -2547,14 +2558,16 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // Captura texto de preferencias especiales [Janeth]
-  if (['preferencias_dieta','preferencias_alergias','preferencias_extras'].includes(flujoItinerario.paso)) {
-    if (manejarTextoPreferencias(mensaje)) return;
+  // 3. Intercepta solicitud explícita de distribución o presupuesto con cifra
+  if (/\b(distribuci[oó]n|distribuir|desglose)\b/i.test(t) || (/\bpresupuesto\b/i.test(t) && /\b(\d[\d,\.]+)\b/.test(t))) {
+    autoDetectarDatosCliente(mensaje);
+    mostrarDistribucionPresupuesto();
+    return;
   }
 
   const exp = obtenerOCrearExpedienteActual();
 
-  // 1. Destino internacional
+  // 4. Destino internacional
   if (esDestinoInternacional(mensaje)) {
     await esperar(400);
     renderMensajeUI('bot', `
@@ -2576,22 +2589,22 @@ async function procesarMensaje(mensaje, t) {
     if (await manejarRespuestaFlujoTexto(mensaje, t)) return;
   }
 
-  // 2. Guardia de tema
+  // 5. Guardia de tema
   if (!esConsultaDeViajes(t) && !esSaludoOAfirmacion(t)) {
     await esperar(300);
     renderMensajeUI('bot', 'Como asistente de viajes, solo puedo ayudarte a planear tus itinerarios y viajes.');
     return;
   }
 
-  // 3. Extraer cliente, destino, personas, días y presupuesto
+  // 6. Extraer cliente, destino, personas, días y presupuesto
   autoDetectarDatosCliente(mensaje);
 
-  // 4. Asistente guiado activo
+  // 7. Asistente guiado activo
   if (flujoItinerario.paso) {
     if (await manejarRespuestaFlujoTexto(mensaje, t)) return;
   }
 
-  // 5. Saludos y afirmaciones
+  // 8. Saludos y afirmaciones
   if (esSaludoOAfirmacion(t)) {
     await esperar(250);
     if (/^(gracias|muchas gracias)/.test(t)) {
@@ -2609,7 +2622,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 6. Consulta de memoria local
+  // 9. Consulta de memoria local
   const respuestaMemoria = consultarMemoriaLocal(mensaje);
   if (respuestaMemoria) {
     await esperar(350);
@@ -2621,7 +2634,7 @@ async function procesarMensaje(mensaje, t) {
   const pideCotizar = /\b(cotiza\w*|itinerario|propuesta|estancia|arma\w*|prepara\w*|planea\w*|plan)\b/.test(t) || /\d+\s*(dias?|noches?)/.test(t);
   const pideModificar = REGEX_PIDE_MODIFICAR.test(t);
 
-  // 7. Descargar PDF
+  // 10. Descargar PDF
   if (pidePdf) {
     if (ultimoItinerarioGenerado && ultimoItinerarioGenerado.validado === false) {
       confirmarPropuestaYGenerarPdf();
@@ -2635,7 +2648,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 8. Modificar la propuesta existente
+  // 11. Modificar la propuesta existente
   if (pideModificar && ultimoItinerarioGenerado) {
     if (!apiKey) {
       renderMensajeUI('bot', '<p>Para modificar una propuesta ya generada necesito Gemini (⚙️). Con el motor local puedes armar una nueva con <strong>Nueva Propuesta</strong>.</p>', false, true);
@@ -2654,7 +2667,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 9. Cotizar propuesta
+  // 12. Cotizar propuesta
   if (pideCotizar) {
     if (destinoDefinido()) {
       await generarYMostrarItinerario({
@@ -2669,7 +2682,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 10. Chat libre con Gemini
+  // 13. Chat libre con Gemini
   if (apiKey) {
     try {
       const respuestaIA = await llamarGemini({
@@ -2684,7 +2697,7 @@ async function procesarMensaje(mensaje, t) {
     }
   }
 
-  // 11. Motor local por temas
+  // 14. Motor local por temas
   await esperar(300);
   if (/\b(playas?|snorkel|buceo|nadar|mar)\b/.test(t)) return responderTema('playas');
   if (/\b(comida|comer|restaurantes?|tacos?|cenar)\b/.test(t)) return responderTema('comida');
