@@ -12,6 +12,7 @@
 const STORAGE_KEY_CRM = 'viaje_expedientes_crm_v1';
 const STORAGE_KEY_KEY = 'viaje_gemini_api_key_v1';
 const STORAGE_KEY_MODEL = 'viaje_gemini_model_v1';
+const STORAGE_KEY_AGENCY = 'viaje_agency_identity_v1';
 
 // Los modelos de Gemini se retiran con frecuencia. Si Google retira este,
 // se puede cambiar desde el modal (⚙️) sin editar el código.
