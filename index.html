@@ -115,9 +115,15 @@
     </div>
 
     <!-- Pie del Prototipo -->
+    <!-- Pie del Prototipo -->
     <footer class="app-footer">
       <p class="hint">
         <strong>vIAje Prototipo 1</strong> · Especialista en los 32 Estados de México · Bitácora y Exportación en PDF
+      </p>
+      <p class="hint" style="margin-top: 6px;">
+        <button type="button" class="btn-link-privacy" id="openPrivacyModalBtn">
+          🔒 Aviso de Confidencialidad y Privacidad
+        </button>
       </p>
     </footer>
   </div>
@@ -187,6 +193,30 @@
       <div class="modal-footer">
         <button type="button" class="btn-secondary" id="clearApiKeyBtn">Eliminar Clave</button>
         <button type="button" class="btn-primary" id="saveApiKeyBtn">Guardar y Probar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Aviso de Confidencialidad y Privacidad -->
+  <div class="modal-overlay" id="privacyModal" style="display: none;">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Aviso de Confidencialidad y Privacidad</h3>
+        <button type="button" class="modal-close" id="closePrivacyModalBtn">✕</button>
+      </div>
+      <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+        <p class="modal-desc">
+          <strong>Tratamiento de Información de Clientes:</strong>
+        </p>
+        <p class="modal-desc" style="font-size: 12.5px;">
+          Toda la información capturada en <strong>vIAje</strong> se procesa de forma estrictamente confidencial con el único propósito de estructurar cotizaciones e itinerarios turísticos.
+        </p>
+        <p class="modal-desc" style="font-size: 12.5px;">
+          <strong>Almacenamiento Local:</strong> Los expedientes y bitácoras se almacenan de manera exclusiva en este navegador (<code>localStorage</code>) y no son compartidos con bases de datos externas.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-primary" id="acceptPrivacyModalBtn">Entendido</button>
       </div>
     </div>
   </div>
