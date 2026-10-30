@@ -4,6 +4,11 @@
    - Motor local de itinerarios + exportación a PDF con jsPDF
    - Itinerarios y consultas con Gemini cuando hay API Key
    - Bitácora de clientes (CRM local en localStorage)
+   - Funcionalidades Integradas:
+     1. Identidad de Agencia para PDF (Sofía)
+     2. Distribución Inteligente del Presupuesto (Teresa)
+     3. Preferencias Especiales del Viajero (Janeth)
+     4. Comparación de Opciones de Viaje (Jorge)
    ========================================================================== */
 
 /* ==========================================================================
@@ -12,6 +17,7 @@
 const STORAGE_KEY_CRM = 'viaje_expedientes_crm_v1';
 const STORAGE_KEY_KEY = 'viaje_gemini_api_key_v1';
 const STORAGE_KEY_MODEL = 'viaje_gemini_model_v1';
+const STORAGE_KEY_AGENCY = 'viaje_agency_identity_v1'; // [Sofía] Identidad de la agencia
 
 // Los modelos de Gemini se retiran con frecuencia. Si Google retira este,
 // se puede cambiar desde el modal (⚙️) sin editar el código.
@@ -37,6 +43,7 @@ REGLAS DE COMPORTAMIENTO:
    - Destinos SIN acceso al mar (CDMX, Guanajuato, Querétaro, Puebla, Hidalgo, Tlaxcala, Morelos, Aguascalientes, Zacatecas, San Luis Potosí, Durango, México Estado): NO menciones playas marinas, snorkel en mar, ni actividades costeras. Sugiere en cambio parques, museos, ríos, balnearios, lagos o cuerpos de agua interiores.
    - Destinos CON litoral (Quintana Roo, Oaxaca costa, Guerrero, Jalisco costa, Nayarit, Sinaloa, Sonora, BCS, Veracruz, Tabasco, Campeche, Yucatán, Chiapas costa): puedes incluir actividades de playa y mar.
 9. LONGITUD DE RESPUESTA: Sé detallado y específico. Un itinerario debe incluir al menos 3–5 líneas por periodo del día (mañana, tarde, noche), con nombres de lugares reales verificados del destino solicitado. Nunca uses nombres genéricos o inventados.
+10. PREFERENCIAS ESPECIALES DEL VIAJERO: Respeta al máximo las restricciones alimenticias, necesidades de movilidad y alergias indicadas en el expediente del cliente.
 `;
 
 // Estado de la aplicación
@@ -170,6 +177,13 @@ function nuevoExpedienteVacio() {
     destino: 'Por definir',
     pasajeros: 1,
     presupuesto: 'Medio',
+    presupuestoTotal: 0, // [Teresa] Presupuesto numérico total en MXN
+    preferencias: {      // [Janeth] Preferencias especiales del cliente
+      dieta: [],
+      movilidad: false,
+      alergias: '',
+      extras: ''
+    },
     fecha: obtenerFechaCorta(),
     fechaCompleta: obtenerFechaCompleta(),
     historial: [],
@@ -197,8 +211,6 @@ function actualizarBarraClienteActivo() {
 }
 
 /* ---------- Catálogo de destinos (32 estados) ---------- */
-// IMPORTANTE: "Baja California Sur" va antes que "Baja California"; si no,
-// la regex de "baja california" también coincide con "baja california sur".
 const DESTINOS_CATALOGO = [
   { claves: ['cdmx', 'ciudad de mexico', 'distrito federal', 'df'], nombre: 'Ciudad de México (CDMX)' },
   { claves: ['aguascalientes', 'calvillo', 'real de asientos'], nombre: 'Aguascalientes' },
@@ -234,7 +246,6 @@ const DESTINOS_CATALOGO = [
   { claves: ['zacatecas', 'jerez', 'sombrerete'], nombre: 'Zacatecas' }
 ];
 
-// Expresiones regulares precompiladas (claves ya normalizadas, sin acentos)
 const CATALOGO_REGEX = DESTINOS_CATALOGO.map(item => ({
   nombre: item.nombre,
   regs: item.claves.map(c => new RegExp('\\b' + normalizar(c) + '\\b'))
@@ -250,7 +261,6 @@ const DESTINOS_INTERNACIONALES = [
 ];
 
 function esDestinoInternacional(texto) {
-  // "Roma Norte / Roma Sur" son colonias de CDMX, no Italia
   const norm = normalizar(texto).replace(/\broma\s+(norte|sur)\b/g, ' ');
   return DESTINOS_INTERNACIONALES.some(p => new RegExp('\\b' + p + '\\b').test(norm));
 }
@@ -292,7 +302,6 @@ function extraerNombreCliente(texto) {
     if (validTokens.length > 0) return validTokens.join(' ');
   }
 
-  // Formato del placeholder: "Carlos, 4 personas, Oaxaca, 3 días"
   const inicio = texto.match(/^\s*([A-ZÁÉÍÓÚÑ][a-záéíóúñü]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+)?)\s*[,;:]/);
   if (inicio) {
     const cand = inicio[1];
@@ -305,17 +314,14 @@ function extraerNombreCliente(texto) {
 function extraerDestino(texto) {
   const norm = normalizar(texto).replace(/["'()]/g, ' ');
 
-  // 1. Catálogo conocido
   for (let i = 0; i < CATALOGO_REGEX.length; i++) {
     if (CATALOGO_REGEX[i].regs.some(r => r.test(norm))) return CATALOGO_REGEX[i].nombre;
   }
 
-  // 2. Patrones explícitos ("destino: X", "estancia en X", "viaje a X")
   const matchDest = texto.match(/(?:destino\s*(?:es|ser[ií]a)?\s*[:=]?\s*["']?|estancia\s*(?:guiada\s*)?en\s*["']?|viaje\s*a\s*["']?)([^"',.()\n\r]{2,30})/i);
   if (matchDest && matchDest[1]) {
     let d = matchDest[1].trim().replace(/["'()]/g, '');
     d = d.replace(/\b(?:para|con|por|en|de|del|durante|desde)\b.*$/i, '').trim();
-    // Solo si empieza con mayúscula (evita "viaje a la playa")
     if (d.length > 2 && /^[A-ZÁÉÍÓÚÑ]/.test(d) && !['un', 'una', 'los', 'las', 'el', 'la', 'mi', 'su', 'este', 'estancia'].includes(d.toLowerCase())) {
       return d.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
     }
@@ -373,6 +379,16 @@ function autoDetectarDatosCliente(texto) {
     modificado = true;
   }
 
+  // [Teresa] Detección de monto total en pesos
+  const matchMonto = texto.match(/(?:presupuesto\s+(?:total\s+)?(?:de\s+)?|monto\s+(?:de\s+)?|\$\s*)(\d[\d,\.]+)/i);
+  if (matchMonto) {
+    const monto = parseFloat(matchMonto[1].replace(/,/g, ''));
+    if (!isNaN(monto) && monto >= 100) {
+      exp.presupuestoTotal = monto;
+      modificado = true;
+    }
+  }
+
   if (modificado) {
     guardarExpedientesStorage();
     actualizarBarraClienteActivo();
@@ -392,6 +408,17 @@ function construirContextoMemoriaClientes() {
   const exp = expedienteActual;
   if (exp) {
     ctx += `\n\n[CONSULTA ACTIVA]: Cliente: ${exp.cliente} | Destino: ${exp.destino} | Pasajeros: ${exp.pasajeros} | Presupuesto: ${exp.presupuesto}`;
+    
+    // [Janeth] Inyección de preferencias especiales en el contexto
+    if (exp.preferencias) {
+      const dieta = (exp.preferencias.dieta || []).join(', ');
+      const movilidad = exp.preferencias.movilidad ? 'Sí requiere accesibilidad' : '';
+      const alergias = exp.preferencias.alergias || '';
+      const extras   = exp.preferencias.extras   || '';
+      const prefStr = [dieta && `Dieta: ${dieta}`, movilidad, alergias && `Alergias: ${alergias}`, extras && `Notas: ${extras}`].filter(Boolean).join(' | ');
+      if (prefStr) ctx += ` | Preferencias Especiales: ${prefStr}`;
+    }
+
     if (exp.ultimoItinerario) {
       ctx += ` | Ya existe una propuesta de ${exp.ultimoItinerario.dias} día(s) en ${exp.ultimoItinerario.destino}.`;
     }
@@ -539,7 +566,6 @@ function cargarExpediente(id) {
       if (m.role === 'user') {
         renderMensajeUI('user', texto, false, false, false);
       } else {
-        // Compatibilidad con entradas antiguas que no guardaban el formato
         const esHTML = typeof m.html === 'boolean' ? m.html : /<\/?[a-z][\s\S]*>/i.test(texto);
         renderMensajeUI('bot', texto, false, esHTML, false);
       }
@@ -553,7 +579,6 @@ function cargarExpediente(id) {
 }
 
 function crearNuevoExpediente() {
-  // Descarta consultas vacías para que no se acumulen al recargar
   expedientes = expedientes.filter(e => !esExpedienteVacio(e));
   expedienteActual = nuevoExpedienteVacio();
   expedientes.unshift(expedienteActual);
@@ -585,7 +610,7 @@ function eliminarExpediente(id) {
 }
 
 /* ==========================================================================
-   5. GENERACIÓN DE PDF CON jsPDF
+   5. GENERACIÓN DE PDF CON jsPDF (SOFÍA)
    ========================================================================== */
 function construirDocumentoPdf(it, datosCliente) {
   const { jsPDF } = window.jspdf;
@@ -596,8 +621,6 @@ function construirDocumentoPdf(it, datosCliente) {
   const CW = W - M * 2;
   let y = 0;
 
-  // jsPDF con fuentes estándar solo admite Latin-1: se normalizan comillas,
-  // viñetas y guiones tipográficos antes de descartar lo no soportado.
   const limpio = s => String(s || '')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
@@ -644,7 +667,7 @@ function construirDocumentoPdf(it, datosCliente) {
     y += 14;
   };
 
-  // ---- Leer identidad de agencia ----
+  // ---- [Sofía] Leer e inyectar identidad de la agencia ----
   let agencyData = {};
   try { agencyData = JSON.parse(localStorage.getItem(STORAGE_KEY_AGENCY) || '{}'); } catch(e) {}
   const agNombre  = agencyData.nombre  || 'vIAje Suite';
@@ -761,7 +784,7 @@ function construirDocumentoPdf(it, datosCliente) {
   );
   y += 10;
 
-  // Pie de página y numeración
+  // Pie de página con nombre real de la agencia
   const total = doc.getNumberOfPages();
   for (let p = 1; p <= total; p++) {
     doc.setPage(p);
@@ -772,7 +795,7 @@ function construirDocumentoPdf(it, datosCliente) {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
     doc.setTextColor(100, 95, 85);
-    doc.text(limpio('vIAje · Suite para Agente de Viajes. Las tarifas y horarios pueden variar; verifica disponibilidad antes de reservar.'), M, H - 24);
+    doc.text(limpio(`${agNombre}  ·  ${agSlogan}. Las tarifas y horarios pueden variar; verifica disponibilidad antes de reservar.`), M, H - 24);
     doc.text(limpio(`Página ${p} de ${total}`), W - M, H - 24, { align: 'right' });
   }
 
@@ -800,7 +823,6 @@ function descargarPdfActual() {
     alert('Primero formula o selecciona un itinerario para poder descargarlo en PDF.');
     return;
   }
-  // Una propuesta sin validar pasa primero por la revisión
   if (ultimoItinerarioGenerado.validado === false) {
     mostrarRevisionPropuesta();
     return;
@@ -813,7 +835,7 @@ window.descargarPdfExpediente = descargarPdfExpediente;
 window.descargarPdfActual = descargarPdfActual;
 
 /* ==========================================================================
-   6. BASE DE CONOCIMIENTO Y MOTOR LOCAL DE ITINERARIOS (SIN API KEY)
+   6. BASE DE CONOCIMIENTO Y MOTOR LOCAL DE ITINERARIOS
    ========================================================================== */
 const ESTILOS = {
   relax:    { etiqueta: 'Relax y Descanso',        prompt: 'ritmo tranquilo, descanso, bienestar y paseos suaves' },
@@ -1016,7 +1038,6 @@ function armarItinerarioObjeto(dias, estilo, presupuestoClave, destino = 'Los Ca
       notas: NOTAS_GENERALES
     };
   } else {
-    // Plantilla general para el resto de los estados (sin lugares específicos)
     generico = true;
     pack = {
       nombre: destino,
@@ -1055,7 +1076,6 @@ function armarItinerarioObjeto(dias, estilo, presupuestoClave, destino = 'Los Ca
     };
   }
 
-  // Sin repetir días: no se generan más días que bloques únicos disponibles
   const solicitados = Math.min(Math.max(dias || 3, 1), 7);
   const numDias = Math.min(solicitados, pack.bloques.length);
   const bloquesFinales = pack.bloques.slice(0, numDias).map(b => ({
@@ -1118,7 +1138,7 @@ async function llamarGemini({ sistema, contenidos, json = false, schema = null }
   }
 
   let data = {};
-  try { data = await res.json(); } catch (_) { /* respuesta sin JSON */ }
+  try { data = await res.json(); } catch (_) {}
   if (!res.ok) throw new Error(mensajeErrorGemini(res.status, data));
 
   if (data.promptFeedback && data.promptFeedback.blockReason) {
@@ -1162,6 +1182,16 @@ function construirPromptItinerario({ exp, dias, estilo, presupuestoClave, destin
   const pres = DATOS_PRESUPUESTO[presupuestoClave] || DATOS_PRESUPUESTO.medio;
   const nombre = exp.cliente && exp.cliente !== 'Nueva Consulta' ? exp.cliente : 'no especificado';
 
+  // [Janeth] Lectura de preferencias especiales
+  let strPref = '';
+  if (exp.preferencias) {
+    const d = (exp.preferencias.dieta || []).join(', ');
+    const m = exp.preferencias.movilidad ? 'Accesibilidad requerida' : '';
+    const a = exp.preferencias.alergias ? `Alergias: ${exp.preferencias.alergias}` : '';
+    const e = exp.preferencias.extras ? `Notas: ${exp.preferencias.extras}` : '';
+    strPref = [d && `Dieta: ${d}`, m, a, e].filter(Boolean).join('; ');
+  }
+
   const lineas = [
     previo
       ? 'Modifica el itinerario existente (al final) siguiendo la instrucción del agente. Conserva lo que no se pida cambiar. Si el destino cambió, genera el itinerario nuevo para ese destino.'
@@ -1174,6 +1204,7 @@ function construirPromptItinerario({ exp, dias, estilo, presupuestoClave, destin
     `Viajeros: ${exp.pasajeros || 1}`,
     `Estilo de viaje: ${est.prompt}`,
     `Presupuesto: ${pres.etiqueta}`,
+    strPref ? `RESTRICCIONES Y PREFERENCIAS ESPECIALES DEL CLIENTE: ${strPref}` : null,
     instruccion ? `Instrucción del agente: ${instruccion}` : null,
     '',
     'Requisitos:',
@@ -1183,7 +1214,7 @@ function construirPromptItinerario({ exp, dias, estilo, presupuestoClave, destin
     '- Cada periodo (mañana, tarde, noche) debe tener de 2 a 4 oraciones con nombres concretos. Sin emojis.',
     '- "titulo": título breve del día. "destino": nombre del estado o destino principal.',
     '- "hospedaje": 3 opciones reales acordes al presupuesto, con una frase de justificación.',
-    '- "comida": 4 a 6 restaurantes o platillos típicos reales.',
+    '- "comida": 4 a 6 restaurantes o platillos típicos reales (revisar restricciones alimenticias del cliente si existen).',
     '- "notas": de 4 a 5 consejos de logística y seguridad específicos del destino (traslados, clima, temporada, precauciones).'
   ].filter(l => l !== null);
 
@@ -1238,12 +1269,10 @@ async function generarItinerarioConGemini({ exp, dias, estilo, presupuestoClave,
   };
 }
 
-// Prompt de sistema para chat libre: reglas + memoria de clientes
 function construirSistemaChat() {
   return `${INSTRUCCIONES_SISTEMA}\n\n${construirContextoMemoriaClientes()}`;
 }
 
-// Convierte el historial guardado al formato de Gemini (texto plano, roles alternados)
 function construirContenidosGemini(exp) {
   const brutos = (exp.historial || []).slice(-14).map(h => {
     const raw = (h.parts && h.parts[0] && h.parts[0].text) || h.text || '';
@@ -1266,7 +1295,6 @@ function construirContenidosGemini(exp) {
 /* ==========================================================================
    8. RENDERIZADO DE MENSAJES Y CHAT UI
    ========================================================================== */
-// Markdown básico (títulos, listas, negritas). Escapa el HTML primero.
 function formatearTextoMarkdown(texto) {
   const inline = s => s
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -1290,7 +1318,6 @@ function formatearTextoMarkdown(texto) {
   return html;
 }
 
-// Pinta un mensaje y, salvo que se indique lo contrario, lo guarda en el historial
 function renderMensajeUI(rol, contenido, esError = false, esHTML = false, persistir = true) {
   if (rol === 'bot') ocultarEscribiendo();
 
@@ -1318,7 +1345,6 @@ function renderMensajeUI(rol, contenido, esError = false, esHTML = false, persis
   wrap.appendChild(bubble);
   chatEl.appendChild(wrap);
 
-  // Un mensaje largo (itinerario) se muestra desde su inicio, no desde el final
   if (rol === 'bot' && wrap.offsetHeight > chatEl.clientHeight * 0.8) {
     chatEl.scrollTop = wrap.offsetTop - chatEl.offsetTop - 6;
   } else {
@@ -1413,7 +1439,6 @@ function generarHTMLItinerario(it, nombreCliente, meta = {}) {
     </div>
   `;
 
-  // Avisos de origen: siempre se dice qué motor generó la propuesta
   if (meta.origen === 'gemini') {
     html += `<div class="stamp-verification">Propuesta generada con IA (Gemini). Verifica nombres, horarios y tarifas antes de cotizar al cliente.</div>`;
   }
@@ -1427,11 +1452,9 @@ function generarHTMLItinerario(it, nombreCliente, meta = {}) {
     html += `<div class="stamp-verification">La plantilla local cubre hasta ${esc(it.dias)} día(s) para este destino (pediste ${esc(it.diasSolicitados)}). Con Gemini puedes generar la duración completa.</div>`;
   }
 
-  // El botón de PDF ya no va aquí: el PDF final se genera al confirmar la revisión
   return html;
 }
 
-// Genera con Gemini si hay clave; si falla (o no hay clave) usa el motor local
 async function producirItinerario({ dias, estilo, presupuesto, destino, instruccion = '', previo = null }) {
   const exp = obtenerOCrearExpedienteActual();
   const presupuestoClave = presupuestoAClave(presupuesto);
@@ -1459,7 +1482,6 @@ async function generarYMostrarItinerario(params) {
 
   try {
     const res = await producirItinerario(params);
-    // Se guardan las claves para poder ajustar la propuesta en la revisión
     res.obj.estiloClave = ESTILOS[params.estilo] ? params.estilo : 'mix';
     res.obj.presupuestoClave = presupuestoAClave(params.presupuesto);
     res.obj.validado = false;
@@ -1484,9 +1506,6 @@ async function generarYMostrarItinerario(params) {
 
 /* ==========================================================================
    9b. CICLO DE VALIDACIÓN ANTES DEL PDF FINAL
-   Tras generar la propuesta se presenta su estructura base y se pregunta si
-   se desea ajustar un día o el enfoque (estilo, presupuesto o nombre). El PDF
-   solo se genera cuando el agente confirma.
    ========================================================================== */
 const PASOS_REVISION = ['revision', 'ajuste_dia', 'ajuste_dia_texto', 'ajuste_estilo', 'ajuste_presupuesto', 'ajuste_nombre'];
 
@@ -1572,7 +1591,6 @@ function confirmarPropuestaYGenerarPdf() {
   ]);
 }
 
-// Vuelve a generar la propuesta actual aplicando un ajuste puntual
 async function regenerarPropuesta({ estilo = null, presupuesto = null, instruccion }) {
   const it = ultimoItinerarioGenerado;
   const exp = obtenerOCrearExpedienteActual();
@@ -1694,7 +1712,6 @@ async function manejarAccionRevision(clave) {
   if (clave === 'rev_nombre') return pedirNuevoNombre();
 }
 
-// Respuestas escritas mientras la revisión está activa
 async function manejarRespuestaRevisionTexto(texto, t) {
   switch (flujoItinerario.paso) {
     case 'ajuste_nombre':
@@ -1735,7 +1752,6 @@ async function manejarRespuestaRevisionTexto(texto, t) {
         volverARevision('De acuerdo. ¿Qué deseas ajustar?');
         return true;
       }
-      // "cambia el estilo a aventura", "presupuesto premium", "el nombre es Ana Ruiz"
       if (/\b(estilo|enfoque)\b/.test(t)) {
         const e = detectarEstilo(t);
         if (e) await aplicarNuevoEstilo(e);
@@ -1754,7 +1770,6 @@ async function manejarRespuestaRevisionTexto(texto, t) {
         else pedirNuevoNombre();
         return true;
       }
-      // Las instrucciones de cambio libres siguen el camino normal de modificación
       if (REGEX_PIDE_MODIFICAR.test(t)) return false;
       if (/\b(si|ok|okay|va|vale|dale|listo|perfecto|correcto|adelante|confirm\w*|aprob\w*|genera\w*|pdf|descarga\w*)\b/.test(t)) {
         confirmarPropuestaYGenerarPdf();
@@ -1763,6 +1778,274 @@ async function manejarRespuestaRevisionTexto(texto, t) {
       return false;
   }
   return false;
+}
+
+/* ==========================================================================
+   9c. DISTRIBUCIÓN INTELIGENTE DEL PRESUPUESTO (TERESA)
+   ========================================================================== */
+const DIST_PRESUPUESTO = {
+  mochi: { vuelo: 30, hospedaje: 28, comida: 20, actividades: 15, extras: 7  },
+  medio: { vuelo: 28, hospedaje: 30, comida: 18, actividades: 16, extras: 8  },
+  todo:  { vuelo: 20, hospedaje: 45, comida: 15, actividades: 12, extras: 8  }
+};
+
+function calcularDistribucion(totalMXN, clave, pasajeros, dias) {
+  const pct = DIST_PRESUPUESTO[clave] || DIST_PRESUPUESTO.medio;
+  const ppp = pasajeros > 0 ? pasajeros : 1;
+  return Object.entries(pct).map(([cat, p]) => {
+    const total = Math.round((totalMXN * p) / 100);
+    const porPax = Math.round(total / ppp);
+    const porDia = dias > 0 ? Math.round(total / dias) : total;
+    return { cat, p, total, porPax, porDia };
+  });
+}
+
+const CAT_LABEL = {
+  vuelo: '✈ Vuelos / Traslados',
+  hospedaje: '🏨 Hospedaje',
+  comida: '🍽 Alimentación',
+  actividades: '🎭 Actividades / Tours',
+  extras: '🧳 Extras / Imprevistos'
+};
+
+function mostrarDistribucionPresupuesto() {
+  const exp = obtenerOCrearExpedienteActual();
+  const total = exp.presupuestoTotal || 0;
+  const clave = presupuestoAClave(exp.presupuesto);
+  const dias  = exp.dias || flujoItinerario.dias || 3;
+
+  if (!total || total < 100) {
+    flujoItinerario.paso = 'presupuesto_monto';
+    renderMensajeUI('bot',
+      `<p>Para distribuir el presupuesto, dime el <strong>monto total disponible</strong> en pesos mexicanos (MXN). Ej: "15000" o "presupuesto 15000".</p>`,
+      false, true);
+    return;
+  }
+
+  const filas = calcularDistribucion(total, clave, exp.pasajeros, dias);
+  let html = `
+    <div class="itin-card">
+      <b>Distribución Inteligente del Presupuesto</b>
+      <div class="itin-slot"><em>Cliente</em><span>${esc(exp.cliente !== 'Nueva Consulta' ? exp.cliente : 'Sin nombre')}</span></div>
+      <div class="itin-slot"><em>Presupuesto total</em><span>$${esc(total.toLocaleString('es-MX'))} MXN</span></div>
+      <div class="itin-slot"><em>Viajeros</em><span>${esc(exp.pasajeros)}</span></div>
+      <div class="itin-slot"><em>Duración</em><span>${esc(dias)} día(s)</span></div>
+      <div class="itin-slot"><em>Estilo</em><span>${esc(exp.presupuesto)}</span></div>
+    </div>
+    <div class="itin-card">
+      <b>Desglose por Categoría</b>`;
+
+  filas.forEach(f => {
+    html += `
+      <div class="itin-slot">
+        <em>${esc(CAT_LABEL[f.cat])} (${f.p}%)</em>
+        <span>$${f.total.toLocaleString('es-MX')} MXN &nbsp;·&nbsp; $${f.porPax.toLocaleString('es-MX')}/pax &nbsp;·&nbsp; $${f.porDia.toLocaleString('es-MX')}/día</span>
+      </div>`;
+  });
+
+  html += `</div>
+    <p style="font-size:12px;opacity:.75;margin-top:4px;">Los porcentajes son orientativos según el perfil de viaje. Ajusta según cotizaciones reales antes de presentar al cliente.</p>`;
+
+  renderMensajeUI('bot', html, false, true);
+  renderizarChips([
+    ['presupuesto_cambiar', 'Cambiar monto'],
+    ['itinerario', 'Nueva Propuesta', true],
+    ['menu', 'Menú Principal']
+  ]);
+}
+
+/* ==========================================================================
+   9d. PREFERENCIAS ESPECIALES DEL VIAJERO (JANETH)
+   ========================================================================== */
+function mostrarMenuPreferencias() {
+  flujoItinerario.paso = 'preferencias_menu';
+  const exp = obtenerOCrearExpedienteActual();
+  if (!exp.preferencias) exp.preferencias = { dieta: [], movilidad: false, alergias: '', extras: '' };
+  const dietaActual = (exp.preferencias.dieta || []).join(', ') || 'Sin restricciones';
+  const movActual   = exp.preferencias.movilidad ? 'Sí' : 'No';
+
+  renderMensajeUI('bot', `
+    <div class="itin-card">
+      <b>Preferencias Especiales del Viajero</b>
+      <div class="itin-slot"><em>Dieta</em><span>${esc(dietaActual)}</span></div>
+      <div class="itin-slot"><em>Requiere accesibilidad</em><span>${esc(movActual)}</span></div>
+      <div class="itin-slot"><em>Alergias</em><span>${esc(exp.preferencias.alergias || 'Ninguna registrada')}</span></div>
+      <div class="itin-slot"><em>Notas extra</em><span>${esc(exp.preferencias.extras || 'Ninguna')}</span></div>
+    </div>
+    <p>¿Qué deseas registrar o actualizar?</p>
+  `, false, true);
+
+  renderizarChips([
+    ['pref_dieta', 'Restricción de dieta'],
+    ['pref_movilidad', exp.preferencias.movilidad ? 'Quitar accesibilidad' : 'Necesita accesibilidad'],
+    ['pref_alergias', 'Alergias / Intolerancias'],
+    ['pref_extras', 'Notas adicionales'],
+    ['pref_limpiar', 'Limpiar preferencias'],
+    ['menu', 'Menú Principal']
+  ]);
+}
+
+function manejarChipPreferencias(clave) {
+  const exp = obtenerOCrearExpedienteActual();
+  if (!exp.preferencias) exp.preferencias = { dieta: [], movilidad: false, alergias: '', extras: '' };
+
+  if (clave === 'pref_movilidad') {
+    exp.preferencias.movilidad = !exp.preferencias.movilidad;
+    guardarExpedientesStorage();
+    mostrarMenuPreferencias();
+    return true;
+  }
+  if (clave === 'pref_limpiar') {
+    exp.preferencias = { dieta: [], movilidad: false, alergias: '', extras: '' };
+    guardarExpedientesStorage();
+    renderMensajeUI('bot', '<p>Preferencias del viajero eliminadas.</p>', false, true);
+    renderizarChipsPrincipales();
+    return true;
+  }
+  if (clave === 'pref_dieta') {
+    flujoItinerario.paso = 'preferencias_dieta';
+    renderMensajeUI('bot', '<p>¿Qué tipo de dieta sigue el viajero? (Ej: vegetariano, vegano, sin gluten, sin mariscos, halal)</p>', false, true);
+    renderizarChips([
+      ['pref_d_vegetariano', 'Vegetariano'],
+      ['pref_d_vegano', 'Vegano'],
+      ['pref_d_singluten', 'Sin gluten'],
+      ['pref_d_sinmariscos', 'Sin mariscos'],
+      ['pref_d_halal', 'Halal'],
+      ['pref_menu', 'Volver']
+    ]);
+    return true;
+  }
+  if (clave.startsWith('pref_d_')) {
+    const tipo = clave.replace('pref_d_', '').replace('singluten','sin gluten').replace('sinmariscos','sin mariscos');
+    if (!exp.preferencias.dieta.includes(tipo)) exp.preferencias.dieta.push(tipo);
+    guardarExpedientesStorage();
+    mostrarMenuPreferencias();
+    return true;
+  }
+  if (clave === 'pref_alergias') {
+    flujoItinerario.paso = 'preferencias_alergias';
+    renderMensajeUI('bot', '<p>Escribe las alergias o intolerancias del viajero (Ej: nueces, lácteos, mariscos):</p>', false, true);
+    renderizarChips([['pref_menu', 'Volver']]);
+    return true;
+  }
+  if (clave === 'pref_extras') {
+    flujoItinerario.paso = 'preferencias_extras';
+    renderMensajeUI('bot', '<p>Escribe cualquier nota especial del viajero (Ej: silla de ruedas, bebé a bordo, celebración de aniversario):</p>', false, true);
+    renderizarChips([['pref_menu', 'Volver']]);
+    return true;
+  }
+  if (clave === 'pref_menu') {
+    flujoItinerario.paso = null;
+    mostrarMenuPreferencias();
+    return true;
+  }
+  return false;
+}
+
+function manejarTextoPreferencias(texto) {
+  const exp = obtenerOCrearExpedienteActual();
+  if (!exp.preferencias) exp.preferencias = { dieta: [], movilidad: false, alergias: '', extras: '' };
+
+  if (flujoItinerario.paso === 'preferencias_dieta') {
+    exp.preferencias.dieta = texto.split(/[,;\/]+/).map(s => s.trim()).filter(Boolean);
+    guardarExpedientesStorage();
+    flujoItinerario.paso = null;
+    mostrarMenuPreferencias();
+    return true;
+  }
+  if (flujoItinerario.paso === 'preferencias_alergias') {
+    exp.preferencias.alergias = texto.trim().slice(0, 200);
+    guardarExpedientesStorage();
+    flujoItinerario.paso = null;
+    mostrarMenuPreferencias();
+    return true;
+  }
+  if (flujoItinerario.paso === 'preferencias_extras') {
+    exp.preferencias.extras = texto.trim().slice(0, 300);
+    guardarExpedientesStorage();
+    flujoItinerario.paso = null;
+    mostrarMenuPreferencias();
+    return true;
+  }
+  return false;
+}
+
+/* ==========================================================================
+   9e. COMPARACIÓN DE OPCIONES DE VIAJE (JORGE)
+   ========================================================================== */
+const OPCIONES_COMPARACION = [
+  {
+    clave: 'mochi',
+    etiqueta: 'Opción Económica',
+    icono: '💚',
+    hospedajeTipo: 'Hostal / Hotel 2★',
+    comidaTipo: 'Taquerías y mercados locales',
+    actividadesTipo: 'Sitios gratuitos y de bajo costo',
+    pctPresupuesto: 0.6
+  },
+  {
+    clave: 'medio',
+    etiqueta: 'Opción Intermedia',
+    icono: '💛',
+    hospedajeTipo: 'Hotel 3-4★ / Boutique',
+    comidaTipo: 'Restaurantes populares con opción especial',
+    actividadesTipo: 'Tours guiados y experiencias locales',
+    pctPresupuesto: 1.0
+  },
+  {
+    clave: 'todo',
+    etiqueta: 'Opción Premium',
+    icono: '💎',
+    hospedajeTipo: 'Resort 5★ / Todo Incluido',
+    comidaTipo: 'Restaurantes gourmet y maridaje',
+    actividadesTipo: 'Experiencias exclusivas y privadas',
+    pctPresupuesto: 1.6
+  }
+];
+
+function mostrarComparacionOpciones() {
+  const exp = obtenerOCrearExpedienteActual();
+  if (!destinoDefinido()) {
+    pasoFlujoDestino('Para comparar opciones primero necesito el destino. ');
+    return;
+  }
+  const dias = exp.dias || flujoItinerario.dias || 3;
+  const pax  = exp.pasajeros || 1;
+  const baseTotal = exp.presupuestoTotal || 0;
+
+  let html = `
+    <div class="itin-card">
+      <b>Comparación de Opciones de Viaje</b>
+      <div class="itin-slot"><em>Destino</em><span>${esc(exp.destino)}</span></div>
+      <div class="itin-slot"><em>Duración</em><span>${esc(dias)} día(s)</span></div>
+      <div class="itin-slot"><em>Viajeros</em><span>${esc(pax)}</span></div>
+    </div>`;
+
+  OPCIONES_COMPARACION.forEach(op => {
+    const presData = DATOS_PRESUPUESTO[op.clave];
+    const montoStr = baseTotal
+      ? `~$${Math.round(baseTotal * op.pctPresupuesto).toLocaleString('es-MX')} MXN totales`
+      : 'Monto no definido';
+    html += `
+      <div class="itin-card">
+        <b>${op.icono} ${esc(op.etiqueta)}</b>
+        <div class="itin-slot"><em>Hospedaje</em><span>${esc(op.hospedajeTipo)}</span></div>
+        <div class="itin-slot"><em>Alimentación</em><span>${esc(op.comidaTipo)}</span></div>
+        <div class="itin-slot"><em>Actividades</em><span>${esc(op.actividadesTipo)}</span></div>
+        <div class="itin-slot"><em>Ejemplo local</em><span>${esc((presData || {}).hospedaje || 'Según disponibilidad').slice(0, 90)}</span></div>
+        <div class="itin-slot"><em>Costo estimado</em><span>${esc(montoStr)}</span></div>
+      </div>`;
+  });
+
+  html += `<p style="font-size:12px;opacity:.75;margin-top:4px;">Toca una opción para generar el itinerario completo con esa modalidad.</p>`;
+  renderMensajeUI('bot', html, false, true);
+
+  renderizarChips([
+    ['comp_economico', '💚 Generar Itinerario Económico'],
+    ['comp_medio', '💛 Generar Itinerario Intermedio'],
+    ['comp_premium', '💎 Generar Itinerario Premium'],
+    ['menu', 'Menú Principal']
+  ]);
 }
 
 /* ==========================================================================
@@ -1809,16 +2092,14 @@ function renderizarChipsPrincipales() {
 }
 
 async function manejarAccionChip(clave, texto) {
-    if (clave.startsWith('multi_')) {
+  if (clave.startsWith('multi_')) {
     if (sendBtnEl.disabled) return;
-
     await enviarMensajeUsuario(texto);
     return;
-
   }
+
   if (ultimoItinerarioGenerado?.multidestino) {
     renderMensajeUI('user', texto);
-
     if (clave === 'rev_ok') {
       confirmarPropuestaYGenerarPdf();
     } else if (clave === 'itinerario') {
@@ -1826,10 +2107,8 @@ async function manejarAccionChip(clave, texto) {
     } else {
       mostrarRevisionMultiple();
     }
-
     return;
   }
-
 
   autoDetectarDatosCliente(texto);
   renderMensajeUI('user', texto);
@@ -1838,7 +2117,6 @@ async function manejarAccionChip(clave, texto) {
     await manejarAccionRevision(clave);
     return;
   }
-  // Salir a otro tema deja la propuesta sin validar (se puede retomar al pedir el PDF)
   if (enRevision()) flujoItinerario.paso = null;
 
   if (clave === 'itinerario') {
@@ -1857,6 +2135,22 @@ async function manejarAccionChip(clave, texto) {
     pasoFlujoPresupuesto();
   } else if (clave.startsWith('b_')) {
     flujoItinerario.presupuesto = clave.slice(2);
+    await completarFlujoItinerario();
+  } else if (clave === 'presupuesto' || clave === 'presupuesto_cambiar') {
+    if (clave === 'presupuesto_cambiar') { obtenerOCrearExpedienteActual().presupuestoTotal = 0; }
+    mostrarDistribucionPresupuesto();
+  } else if (clave === 'preferencias' || clave.startsWith('pref_')) {
+    manejarChipPreferencias(clave);
+  } else if (clave === 'comparar') {
+    mostrarComparacionOpciones();
+  } else if (clave === 'comp_economico') {
+    flujoItinerario.presupuesto = 'mochi';
+    await completarFlujoItinerario();
+  } else if (clave === 'comp_medio') {
+    flujoItinerario.presupuesto = 'medio';
+    await completarFlujoItinerario();
+  } else if (clave === 'comp_premium') {
+    flujoItinerario.presupuesto = 'todo';
     await completarFlujoItinerario();
   } else if (['playas', 'comida', 'hoteles', 'cultura', 'tips'].includes(clave)) {
     setOcupado(true);
@@ -1968,7 +2262,6 @@ function detectarPresupuesto(t) {
   return null;
 }
 
-// El agente escribe en lugar de tocar los chips mientras el asistente guiado está activo
 async function manejarRespuestaFlujoTexto(texto, t) {
   const exp = obtenerOCrearExpedienteActual();
 
@@ -2033,7 +2326,7 @@ async function manejarRespuestaFlujoTexto(texto, t) {
 }
 
 /* ==========================================================================
-   11. RESPUESTAS POR TEMA (PLAYAS, COMIDA, HOTELES, ATRACCIONES, LOGÍSTICA)
+   11. RESPUESTAS POR TEMA
    ========================================================================== */
 const TEMAS_GEMINI = {
   playas: 'las mejores playas y actividades de mar o, si el destino no tiene litoral, sus cuerpos de agua y balnearios',
@@ -2067,7 +2360,6 @@ async function responderTema(tema) {
     return;
   }
 
-  // Con Gemini: recomendaciones para cualquier estado (Los Cabos usa las fichas verificadas)
   if (apiKey && !esCabos) {
     mostrarEscribiendo();
     try {
@@ -2195,7 +2487,6 @@ function fichaTipsCabos() {
 /* ==========================================================================
    12. ENVÍO DE MENSAJES: GUARDIAS, GEMINI Y MOTOR LOCAL
    ========================================================================== */
-// Lista blanca: solo se atienden mensajes que parecen de viajes
 const REGEX_TEMA_VIAJES = /\b(viaj\w*|cliente|clienta|itinerario|cotiz\w*|propuesta|hotel\w*|hospedaj\w*|alojamiento|resort|playas?|restaurantes?|comida|comer|cenar|tacos?|tour\w*|excursion\w*|destinos?|presupuesto|vuelos?|aeropuerto|transfer\w*|pdf|dias?|noches?|personas?|pax|pareja|familia|mochiler\w*|logistica|tips?|consejos?|segur\w*|atraccion\w*|visitar|conocer|turis\w*|bitacora|expediente|pasajeros?|clima|equipaje|boletos?|autobus|precio\w*|costo\w*|tarifa\w*|recomiend\w*|recomienda\w*|sugier\w*|sugiere\w*|actividad\w*|lugares|vacacion\w*|reserv\w*|museo\w*|pueblo\w*|cambia\w*|modifica\w*|ajusta\w*|agrega\w*|anade\w*|quita\w*|elimina\w*|reemplaza\w*|sustituye\w*|menu|cancela\w*|salir|reiniciar|estado|estados|mexico|mexicano|barato|economic\w*|lujo|premium|temporada|lluvia|ballenas?|mar)\b/;
 
 function esConsultaDeViajes(t) {
@@ -2234,11 +2525,36 @@ async function enviarMensajeUsuario(texto) {
 const REGEX_PIDE_MODIFICAR = /\b(cambia\w*|modifica\w*|ajusta\w*|agrega\w*|anade|quita\w*|elimina\w*|reemplaza\w*|sustituye\w*|prefiero|mejor|en vez de|en lugar de)\b/;
 
 async function procesarMensaje(mensaje, t) {
-  if (await manejarMensajeMultidestino(mensaje)) return;
+  if (typeof manejarMensajeMultidestino === 'function') {
+    if (await manejarMensajeMultidestino(mensaje)) return;
+  }
+
+  // Captura monto de presupuesto si el flujo lo está esperando [Teresa]
+  if (flujoItinerario.paso === 'presupuesto_monto') {
+    const mMatch = t.match(/(\d[\d,\.]+)/);
+    if (mMatch) {
+      const monto = parseFloat(mMatch[1].replace(/,/g, ''));
+      if (!isNaN(monto) && monto >= 100) {
+        const exp2 = obtenerOCrearExpedienteActual();
+        exp2.presupuestoTotal = monto;
+        guardarExpedientesStorage();
+        flujoItinerario.paso = null;
+        mostrarDistribucionPresupuesto();
+        return;
+      }
+    }
+    renderMensajeUI('bot', '<p>Escribe solo el monto numérico en pesos. Ej: <strong>15000</strong>.</p>', false, true);
+    return;
+  }
+
+  // Captura texto de preferencias especiales [Janeth]
+  if (['preferencias_dieta','preferencias_alergias','preferencias_extras'].includes(flujoItinerario.paso)) {
+    if (manejarTextoPreferencias(mensaje)) return;
+  }
 
   const exp = obtenerOCrearExpedienteActual();
 
-  // 1. Destino internacional: vIAje solo cubre los 32 estados de México
+  // 1. Destino internacional
   if (esDestinoInternacional(mensaje)) {
     await esperar(400);
     renderMensajeUI('bot', `
@@ -2256,13 +2572,11 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // Nombre del cliente o cambio de un día en la revisión: el texto se toma tal cual,
-  // sin pasar por la autodetección (que podría cambiar destino o presupuesto)
   if (flujoItinerario.paso === 'ajuste_nombre' || flujoItinerario.paso === 'ajuste_dia_texto') {
     if (await manejarRespuestaFlujoTexto(mensaje, t)) return;
   }
 
-  // 2. Guardia de tema (lista blanca). Va antes de tocar el expediente.
+  // 2. Guardia de tema
   if (!esConsultaDeViajes(t) && !esSaludoOAfirmacion(t)) {
     await esperar(300);
     renderMensajeUI('bot', 'Como asistente de viajes, solo puedo ayudarte a planear tus itinerarios y viajes.');
@@ -2272,12 +2586,12 @@ async function procesarMensaje(mensaje, t) {
   // 3. Extraer cliente, destino, personas, días y presupuesto
   autoDetectarDatosCliente(mensaje);
 
-  // 4. Asistente guiado activo: interpretar la respuesta escrita
+  // 4. Asistente guiado activo
   if (flujoItinerario.paso) {
     if (await manejarRespuestaFlujoTexto(mensaje, t)) return;
   }
 
-  // 5. Saludos, agradecimientos y afirmaciones sueltas
+  // 5. Saludos y afirmaciones
   if (esSaludoOAfirmacion(t)) {
     await esperar(250);
     if (/^(gracias|muchas gracias)/.test(t)) {
@@ -2295,7 +2609,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 6. Consulta de memoria local (¿te acuerdas de fulanito?)
+  // 6. Consulta de memoria local
   const respuestaMemoria = consultarMemoriaLocal(mensaje);
   if (respuestaMemoria) {
     await esperar(350);
@@ -2321,7 +2635,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 8. Modificar la propuesta existente (requiere Gemini)
+  // 8. Modificar la propuesta existente
   if (pideModificar && ultimoItinerarioGenerado) {
     if (!apiKey) {
       renderMensajeUI('bot', '<p>Para modificar una propuesta ya generada necesito Gemini (⚙️). Con el motor local puedes armar una nueva con <strong>Nueva Propuesta</strong>.</p>', false, true);
@@ -2340,7 +2654,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 9. Pide una propuesta y ya hay destino: generarla (Gemini si hay clave)
+  // 9. Cotizar propuesta
   if (pideCotizar) {
     if (destinoDefinido()) {
       await generarYMostrarItinerario({
@@ -2355,7 +2669,7 @@ async function procesarMensaje(mensaje, t) {
     return;
   }
 
-  // 10. Con Gemini: chat libre con memoria de la consulta
+  // 10. Chat libre con Gemini
   if (apiKey) {
     try {
       const respuestaIA = await llamarGemini({
@@ -2416,7 +2730,7 @@ clearActiveClientBtn.addEventListener('click', () => {
   }
 });
 
-/* ---------- Modal de Identidad de Agencia---------- */
+/* ---------- Modal de Identidad de Agencia (Sofía) ---------- */
 const agencyModal    = document.getElementById('agencyModal');
 const openAgencyBtn  = document.getElementById('openAgencyModalBtn');
 const closeAgencyBtn = document.getElementById('closeAgencyModalBtn');
@@ -2463,6 +2777,7 @@ if (clearAgencyBtn) {
     cargarDatosAgencia();
   });
 }
+
 /* ---------- Modal de configuración de Gemini ---------- */
 function mostrarEstadoApi(texto, clase = '') {
   apiStatusMessage.textContent = texto;
@@ -2510,7 +2825,6 @@ saveApiKeyBtn.addEventListener('click', async () => {
     mostrarEstadoApi(`Conexión exitosa con ${m}. Gemini activado.`, 'success');
     setTimeout(() => { keyModal.style.display = 'none'; }, 900);
   } catch (err) {
-    // La clave queda guardada, pero se avisa que la prueba falló
     mostrarEstadoApi(`No se pudo conectar: ${err.message}`, 'warning');
   } finally {
     saveApiKeyBtn.disabled = false;
@@ -2549,7 +2863,6 @@ function inicializarApp() {
   ticketIdEl.textContent = 'N.º ' + String(Math.floor(Math.random() * 900) + 100);
   ticketDateEl.textContent = obtenerFechaCorta();
 
-  // Limpieza de nombres residuales de versiones anteriores
   let huboCambio = false;
   expedientes.forEach(exp => {
     if (exp.cliente && /ruben\s+que\s+cotiza/i.test(exp.cliente)) {
