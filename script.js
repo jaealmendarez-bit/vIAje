@@ -12,7 +12,6 @@
 const STORAGE_KEY_CRM = 'viaje_expedientes_crm_v1';
 const STORAGE_KEY_KEY = 'viaje_gemini_api_key_v1';
 const STORAGE_KEY_MODEL = 'viaje_gemini_model_v1';
-const STORAGE_KEY_AGENCY = 'viaje_agency_identity_v1';
 
 // Los modelos de Gemini se retiran con frecuencia. Si Google retira este,
 // se puede cambiar desde el modal (⚙️) sin editar el código.
@@ -737,6 +736,14 @@ function construirDocumentoPdf(it, datosCliente) {
     });
     y += 10;
   }
+
+  // Cláusula de confidencialidad en el PDF
+  tituloSeccion('Aviso de Confidencialidad y Uso');
+  escribir(
+    'Este documento contiene una propuesta turistica formulada de manera confidencial para el cliente titular. La informacion contenida queda reservada unicamente para la gestion y contratacion de servicios turisticos con la agencia.',
+    M, CW, 8.5, 'normal', [100, 95, 85], 11.5
+  );
+  y += 10;
 
   // Pie de página y numeración
   const total = doc.getNumberOfPages();
@@ -2450,6 +2457,26 @@ clearApiKeyBtn.addEventListener('click', () => {
   geminiApiKeyInput.value = '';
   mostrarEstadoApi('Clave eliminada. Se usará el motor local.', 'warning');
 });
+
+/* ---------- Modal de Aviso de Confidencialidad ---------- */
+const privacyModal = document.getElementById('privacyModal');
+const openPrivacyModalBtn = document.getElementById('openPrivacyModalBtn');
+const closePrivacyModalBtn = document.getElementById('closePrivacyModalBtn');
+const acceptPrivacyModalBtn = document.getElementById('acceptPrivacyModalBtn');
+
+if (openPrivacyModalBtn && privacyModal) {
+  openPrivacyModalBtn.addEventListener('click', () => {
+    privacyModal.style.display = 'flex';
+  });
+
+  const cerrarAviso = () => { privacyModal.style.display = 'none'; };
+  if (closePrivacyModalBtn) closePrivacyModalBtn.addEventListener('click', cerrarAviso);
+  if (acceptPrivacyModalBtn) acceptPrivacyModalBtn.addEventListener('click', cerrarAviso);
+
+  privacyModal.addEventListener('click', (e) => {
+    if (e.target === privacyModal) cerrarAviso();
+  });
+}
 
 /* ---------- Arranque ---------- */
 function inicializarApp() {
