@@ -644,6 +644,14 @@ function construirDocumentoPdf(it, datosCliente) {
     y += 14;
   };
 
+  // ---- Leer identidad de agencia ----
+  let agencyData = {};
+  try { agencyData = JSON.parse(localStorage.getItem(STORAGE_KEY_AGENCY) || '{}'); } catch(e) {}
+  const agNombre  = agencyData.nombre  || 'vIAje Suite';
+  const agTel     = agencyData.telefono || '';
+  const agSlogan  = agencyData.slogan  || 'Suite para Agentes de Viajes';
+  const agEmail   = agencyData.email   || '';
+
   // Encabezado tipo pase de abordar
   doc.setFillColor(18, 48, 59);
   doc.rect(0, 0, W, 110, 'F');
@@ -652,22 +660,30 @@ function construirDocumentoPdf(it, datosCliente) {
 
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(24);
-  doc.text('vIAje - Pase de Itinerario Turístico', M, 48);
+  doc.setFontSize(20);
+  doc.text(limpio(agNombre), M, 38);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9.5);
+  doc.setTextColor(244, 238, 221);
+  const contactoLinea = [agTel, agEmail].filter(Boolean).join('  |  ');
+  if (contactoLinea) doc.text(limpio(contactoLinea), M, 50);
+  doc.text(limpio(agSlogan), M, 60);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(11);
+  doc.setTextColor(255, 255, 255);
   const nombreC = datosCliente && datosCliente.cliente !== 'Nueva Consulta' ? datosCliente.cliente : 'Viajero';
   const destinoPdf = it.destino || (datosCliente && datosCliente.destino) || 'México';
-  doc.text(limpio(`Propuesta preparada para: ${nombreC}  |  Destino: ${destinoPdf}`), M, 68);
+  doc.text(limpio(`Propuesta para: ${nombreC}  |  Destino: ${destinoPdf}`), M, 75);
 
   doc.setFontSize(9.5);
   doc.setTextColor(244, 238, 221);
   const pax = datosCliente ? datosCliente.pasajeros : 1;
   const estilo = it.estiloEtiqueta || 'Recomendado';
   const pres = it.presupuestoEtiqueta || (datosCliente ? datosCliente.presupuesto : 'Medio');
-  doc.text(limpio(`Duración: ${it.dias} día(s)  |  Viajeros: ${pax} pax  |  Estilo: ${estilo}  |  Presupuesto: ${pres}`), M, 86);
-  doc.text(limpio(`Fecha de emisión: ${obtenerFechaCompleta()}  |  Asesor: vIAje Suite`), M, 99);
+  doc.text(limpio(`Duración: ${it.dias} día(s)  |  Viajeros: ${pax} pax  |  Estilo: ${estilo}  |  Presupuesto: ${pres}`), M, 88);
+  doc.text(limpio(`Emisión: ${obtenerFechaCompleta()}  |  Asesor: ${agNombre}`), M, 99);
 
   y = 138;
 
