@@ -1,6 +1,6 @@
 /* ==========================================================================
    vIAje — Prototipo 1 (Suite para Agentes de Viajes)
-   - Diseño de pase de abordar / boleto vintage
+   - Diseño de pase de abordar / boleto 
    - Motor local de itinerarios + exportación a PDF con jsPDF
    - Itinerarios y consultas con Gemini cuando hay API Key
    - Bitácora de clientes (CRM local en localStorage)
@@ -1384,7 +1384,7 @@ function generarHTMLItinerario(it, nombreCliente, meta = {}) {
     <div class="itin-card">
       <b>Notas Logísticas y Seguridad</b>
       <ul class="bot-list" style="margin-top: 5px;">
-        ${(it.notas || []).slice(0, 5).map(n => `<li>${esc(n)}</li>`).join('')}
+        ${(it.notas || []).map(n => `<li>${esc(n)}</li>`).join('')}
       </ul>
     </div>
   `;
@@ -1480,6 +1480,11 @@ function enRevision() {
 }
 
 function mostrarRevisionPropuesta() {
+  if (ultimoItinerarioGenerado?.multidestino) {
+    mostrarRevisionMultiple();
+    return;
+  }
+
   const it = ultimoItinerarioGenerado;
   if (!it) return;
   const exp = obtenerOCrearExpedienteActual();
@@ -1777,6 +1782,28 @@ function renderizarChipsPrincipales() {
 }
 
 async function manejarAccionChip(clave, texto) {
+    if (clave.startsWith('multi_')) {
+    if (sendBtnEl.disabled) return;
+
+    await enviarMensajeUsuario(texto);
+    return;
+
+  }
+  if (ultimoItinerarioGenerado?.multidestino) {
+    renderMensajeUI('user', texto);
+
+    if (clave === 'rev_ok') {
+      confirmarPropuestaYGenerarPdf();
+    } else if (clave === 'itinerario') {
+      iniciarMultidestino();
+    } else {
+      mostrarRevisionMultiple();
+    }
+
+    return;
+  }
+
+
   autoDetectarDatosCliente(texto);
   renderMensajeUI('user', texto);
 
@@ -2180,6 +2207,8 @@ async function enviarMensajeUsuario(texto) {
 const REGEX_PIDE_MODIFICAR = /\b(cambia\w*|modifica\w*|ajusta\w*|agrega\w*|anade|quita\w*|elimina\w*|reemplaza\w*|sustituye\w*|prefiero|mejor|en vez de|en lugar de)\b/;
 
 async function procesarMensaje(mensaje, t) {
+  if (await manejarMensajeMultidestino(mensaje)) return;
+
   const exp = obtenerOCrearExpedienteActual();
 
   // 1. Destino internacional: vIAje solo cubre los 32 estados de México
