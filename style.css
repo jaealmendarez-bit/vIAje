@@ -1033,3 +1033,22 @@ body {
 .review-card .itin-slot {
   grid-template-columns: 92px 1fr;
 }
+
+/* =========================================================
+   ENLACE Y MODAL DE CONFIDENCIALIDAD
+   ========================================================= */
+.btn-link-privacy {
+  background: transparent;
+  border: none;
+  color: var(--gold);
+  font-family: 'Karla', sans-serif;
+  font-size: 11.5px;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 2px 4px;
+  transition: color 0.15s ease;
+}
+
+.btn-link-privacy:hover {
+  color: var(--cream);
+}
