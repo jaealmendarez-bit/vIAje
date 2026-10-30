@@ -2397,6 +2397,53 @@ clearActiveClientBtn.addEventListener('click', () => {
   }
 });
 
+/* ---------- Modal de Identidad de Agencia---------- */
+const agencyModal    = document.getElementById('agencyModal');
+const openAgencyBtn  = document.getElementById('openAgencyModalBtn');
+const closeAgencyBtn = document.getElementById('closeAgencyModalBtn');
+const saveAgencyBtn  = document.getElementById('saveAgencyBtn');
+const clearAgencyBtn = document.getElementById('clearAgencyBtn');
+const agencyNameInput   = document.getElementById('agencyNameInput');
+const agencyPhoneInput  = document.getElementById('agencyPhoneInput');
+const agencySloganInput = document.getElementById('agencySloganInput');
+const agencyEmailInput  = document.getElementById('agencyEmailInput');
+
+function cargarDatosAgencia() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORAGE_KEY_AGENCY) || '{}');
+    agencyNameInput.value   = d.nombre   || '';
+    agencyPhoneInput.value  = d.telefono || '';
+    agencySloganInput.value = d.slogan   || '';
+    agencyEmailInput.value  = d.email    || '';
+  } catch(e) {}
+}
+
+if (openAgencyBtn) {
+  openAgencyBtn.addEventListener('click', () => {
+    cargarDatosAgencia();
+    agencyModal.style.display = 'flex';
+  });
+}
+if (closeAgencyBtn) closeAgencyBtn.addEventListener('click', () => { agencyModal.style.display = 'none'; });
+if (agencyModal) agencyModal.addEventListener('click', (e) => { if (e.target === agencyModal) agencyModal.style.display = 'none'; });
+if (saveAgencyBtn) {
+  saveAgencyBtn.addEventListener('click', () => {
+    const datos = {
+      nombre:   agencyNameInput.value.trim(),
+      telefono: agencyPhoneInput.value.trim(),
+      slogan:   agencySloganInput.value.trim(),
+      email:    agencyEmailInput.value.trim()
+    };
+    localStorage.setItem(STORAGE_KEY_AGENCY, JSON.stringify(datos));
+    agencyModal.style.display = 'none';
+  });
+}
+if (clearAgencyBtn) {
+  clearAgencyBtn.addEventListener('click', () => {
+    localStorage.removeItem(STORAGE_KEY_AGENCY);
+    cargarDatosAgencia();
+  });
+}
 /* ---------- Modal de configuración de Gemini ---------- */
 function mostrarEstadoApi(texto, clase = '') {
   apiStatusMessage.textContent = texto;
